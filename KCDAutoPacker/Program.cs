@@ -1,4 +1,6 @@
-﻿using System.IO.Compression;
+﻿using System.Collections.Concurrent;
+using System.Diagnostics;
+using System.IO.Compression;
 
 namespace KCDAutoPacker;
 
@@ -44,28 +46,86 @@ class Program
         watcher.Deleted += (s,e)=>OnChanged(e.FullPath);
         watcher.Renamed += (s,e)=>OnChanged(e.FullPath);
         watcher.EnableRaisingEvents = true;
+        
+        CancellationTokenSource cts = new CancellationTokenSource();
+        Task.Run(()=>BackgroundWorker(cts.Token), cts.Token);
 
         Console.WriteLine("Watching started. Press ENTER to stop and exit...");
         Console.ReadLine();
+        cts.Cancel();
     }
 
     private static void InitialSync()
     {
-        Console.WriteLine($"Initial sync...");
         String[] unpackedDirs = Directory.GetDirectories(_workingDirectory, "*.unpacked", SearchOption.AllDirectories);
         foreach (var dir in unpackedDirs)
+            _pendingQueue.Enqueue(dir);
+    }
+    
+    private static readonly ConcurrentQueue<String> _pendingQueue = new();
+    
+    private static void BackgroundWorker(CancellationToken token)
+    {
+        HashSet<String> failedFiles = new();
+        while (!token.IsCancellationRequested)
         {
-            String displayPath = GetDisplayPath(dir);
-            try
+            Boolean theGameIsRunning = IsGameRunning();
+            if (theGameIsRunning)
             {
-                SyncUnpackedFolder(dir);
+                Console.WriteLine("The game is running and does not allow changing archives. Waiting for exit...");
+                while (theGameIsRunning)
+                {
+                    token.WaitHandle.WaitOne(1000);
+                    theGameIsRunning = IsGameRunning();
+                }
+                Console.WriteLine("The game has been finished. Syncing...");
             }
-            catch (Exception ex)
+
+            if (_pendingQueue.Count == 0)
             {
-                PrintException($"Failed to sync {displayPath}", ex);
+                token.WaitHandle.WaitOne(1000);
+                continue;
+            }
+
+            HashSet<String> uniqueFolder = new();
+            while (_pendingQueue.TryDequeue(out String? folder))
+                uniqueFolder.Add(folder);
+
+            if (uniqueFolder.Count == 0)
+            {
+                token.WaitHandle.WaitOne(1000);
+                continue;
+            }
+
+            Boolean hasError = false;
+            foreach (String unpackedFolder in uniqueFolder)
+            {
+                try
+                {
+                    SyncUnpackedFolder(unpackedFolder);
+                    failedFiles.Remove(unpackedFolder);
+                }
+                catch (Exception ex)
+                {
+                    hasError = true;
+                    _pendingQueue.Enqueue(unpackedFolder);
+                    
+                    if (!failedFiles.Add(unpackedFolder))
+                        PrintException($"Failed to sync {unpackedFolder}.", ex);
+                }
+            }
+
+            if (hasError)
+            {
+                token.WaitHandle.WaitOne(1000);
+                continue;
             }
         }
-        Console.WriteLine($"Done.");
+    }
+
+    private static Boolean IsGameRunning()
+    {
+        return Process.GetProcessesByName("KingdomCome").Any(p => !p.HasExited);
     }
 
     private static void OnChanged(String fullPath)
@@ -74,28 +134,7 @@ class Program
         if (unpackedFolder == null)
             return;
         
-        if (File.Exists(fullPath))
-        {
-            try
-            {
-                File.OpenRead(fullPath).Close();
-            }
-            catch
-            {
-                // File is locked by another process
-                return;
-            }
-        }
-        
-        String displayPath = GetDisplayPath(unpackedFolder);
-        try
-        {
-            SyncUnpackedFolder(unpackedFolder);
-        }
-        catch (Exception ex)
-        {
-            PrintException($"Failed to sync {displayPath}", ex);
-        }
+        _pendingQueue.Enqueue(unpackedFolder);
     }
 
     private static String FindUnpackedFolder(String path)
@@ -129,21 +168,25 @@ class Program
         String parentDir = Path.GetDirectoryName(unpackedFolder);
         String folderName = Path.GetFileNameWithoutExtension(unpackedFolder);
         String archivePath = Path.Combine(parentDir, folderName + ".pak");
+        String folderDisplayPath = GetDisplayPath(unpackedFolder);
 
         var files = Directory.GetFiles(unpackedFolder, "*", SearchOption.AllDirectories);
+        if (files.Length == 0)
+        {
+            Console.WriteLine($"Skipping the empty folder [{folderDisplayPath}] so as not to accidentally delete the necessary archive");
+            return;
+        }
+        
         var diskFiles = new Dictionary<String, FileInfo>(StringComparer.OrdinalIgnoreCase);
         foreach (var file in files)
         {
             String relPath = Path.GetRelativePath(unpackedFolder, file);
             diskFiles[relPath] = new FileInfo(file);
         }
-
-        String archiveDisplayPath = GetDisplayPath(archivePath);
-        String folderDisplayPath = GetDisplayPath(unpackedFolder);
-
+        
         if (!File.Exists(archivePath))
         {
-            Console.WriteLine($"Packing [{folderDisplayPath}] into [{archiveDisplayPath}]");
+            Console.WriteLine($"Packing [{folderDisplayPath}]");
             using (ZipArchive zip = ZipFile.Open(archivePath, ZipArchiveMode.Create))
             {
                 foreach (var kv in diskFiles)
@@ -156,7 +199,7 @@ class Program
         }
         else
         {
-            Console.WriteLine($"Syncing [{folderDisplayPath}] with [{archiveDisplayPath}]");
+            Console.WriteLine($"Syncing [{folderDisplayPath}]");
             using (ZipArchive zip = ZipFile.Open(archivePath, ZipArchiveMode.Update))
             {
                 var zipEntries = zip.Entries.ToDictionary(e => e.FullName, e => e, StringComparer.OrdinalIgnoreCase);
@@ -166,7 +209,7 @@ class Program
                     if (!diskFiles.ContainsKey(entry.FullName))
                     {
                         entry.Delete();
-                        Console.WriteLine($"\t Removed: {entry.FullName} from {archiveDisplayPath}");
+                        Console.WriteLine($"\t Removed: {entry.FullName}");
                     }
                 }
 
@@ -183,13 +226,13 @@ class Program
                             entry.Delete();
                             entry = zip.CreateEntryFromFile(fi.FullName, relPath, CompressionLevel.Optimal);
                             entry.LastWriteTime = fi.LastWriteTime;
-                            Console.WriteLine($"\t Updated: {entry.FullName} in {archiveDisplayPath}");
+                            Console.WriteLine($"\t Updated: {entry.FullName}");
                         }
                     }
                     else
                     {
                         zip.CreateEntryFromFile(fi.FullName, relPath, CompressionLevel.Optimal);
-                        Console.WriteLine($"\t Added: {kv.Key} in {archiveDisplayPath}");
+                        Console.WriteLine($"\t Added: {kv.Key}");
                     }
                 }
             }
