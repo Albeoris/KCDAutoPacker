@@ -11,20 +11,37 @@ class Program
 
     static Int32 Main(String[] args)
     {
+        // Display the ASCII welcome message
+        string welcomeMessage = @"
+╔════════════════════════════════════════════════════════╗
+║  _  ___              _              ___                ║
+║ | |/ (_)_ _  __ _ __| |___ _ __    / __|___ _ __  ___  ║
+║ | ' <| | ' \/ _` / _` / _ \ '  \  | (__/ _ \ '  \/ -_) ║
+║ |_|\_\_|_||_\__, \__,_\___/_|_|_|_ \___\___/_|_|_\___| ║
+║   /_\ _  _| |___/_  | _ \__ _ __| |_____ _ _           ║
+║  / _ \ || |  _/ _ \ |  _/ _` / _| / / -_) '_|          ║
+║ /_/_\_\_,_|\__\___/ |_| \__,_\__|_\_\___|_|            ║
+║ | _ )_  _(_)   /_\ | | |__  ___ ___ _ _(_)___          ║
+║ | _ \ || |_   / _ \| | '_ \/ -_) _ \ '_| (_-<          ║
+║ |___/\_, (_) /_/ \_\_|_.__/\___\___/_| |_/__/          ║
+║      |__/                                              ║
+╚════════════════════════════════════════════════════════╝
+";
+        Console.WriteLine(welcomeMessage);
         _printErrorStack = args.Contains("--print-error-stack", StringComparer.InvariantCultureIgnoreCase);
-        
+
         try
         {
             _workingDirectory = ResolveWorkingDirectory(args);
             Console.WriteLine($"Working directory: {_workingDirectory}");
-            
+
             MainInternal();
             return 0;
         }
         catch (Exception ex)
         {
             PrintException("Unexpected error.", ex);
-            
+
             Console.WriteLine("Press ENTER to exit...");
             Console.ReadLine();
             return 1;
@@ -36,7 +53,7 @@ class Program
         InitialSync();
 
         using FileSystemWatcher watcher = new FileSystemWatcher(_workingDirectory);
-        
+
         watcher.IncludeSubdirectories = true;
         watcher.NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.DirectoryName | NotifyFilters.Size;
         watcher.Filter = "*.*";
@@ -46,7 +63,7 @@ class Program
         watcher.Deleted += (s,e)=>OnChanged(e.FullPath);
         watcher.Renamed += (s,e)=>OnChanged(e.FullPath);
         watcher.EnableRaisingEvents = true;
-        
+
         CancellationTokenSource cts = new CancellationTokenSource();
         Task.Run(()=>BackgroundWorker(cts.Token), cts.Token);
 
@@ -61,9 +78,9 @@ class Program
         foreach (var dir in unpackedDirs)
             _pendingQueue.Enqueue(dir);
     }
-    
+
     private static readonly ConcurrentQueue<String> _pendingQueue = new();
-    
+
     private static void BackgroundWorker(CancellationToken token)
     {
         HashSet<String> failedFiles = new();
@@ -109,7 +126,7 @@ class Program
                 {
                     hasError = true;
                     _pendingQueue.Enqueue(unpackedFolder);
-                    
+
                     if (!failedFiles.Add(unpackedFolder))
                         PrintException($"Failed to sync {unpackedFolder}.", ex);
                 }
@@ -120,6 +137,9 @@ class Program
                 token.WaitHandle.WaitOne(1000);
                 continue;
             }
+
+            // Log completion once all pending tasks are processed
+            LogCompletion();
         }
     }
 
@@ -133,7 +153,7 @@ class Program
         String unpackedFolder = FindUnpackedFolder(fullPath);
         if (unpackedFolder == null)
             return;
-        
+
         _pendingQueue.Enqueue(unpackedFolder);
     }
 
@@ -166,27 +186,31 @@ class Program
     private static void SyncUnpackedFolder(String unpackedFolder)
     {
         String parentDir = Path.GetDirectoryName(unpackedFolder);
-        String folderName = Path.GetFileNameWithoutExtension(unpackedFolder);
+        String folderName = Path.GetFileNameWithoutExtension(unpackedFolder);  // Get mod name (without ".unpacked")
         String archivePath = Path.Combine(parentDir, folderName + ".pak");
         String folderDisplayPath = GetDisplayPath(unpackedFolder);
+
+        // Add a separator before logging each mod's details
+        Console.WriteLine("--------------------------------");
+        Console.WriteLine($"Syncing mod: [ {folderName} ]");
 
         var files = Directory.GetFiles(unpackedFolder, "*", SearchOption.AllDirectories);
         if (files.Length == 0)
         {
-            Console.WriteLine($"Skipping the empty folder [{folderDisplayPath}] so as not to accidentally delete the necessary archive");
+            Console.WriteLine($"Skipping the empty mod folder [{folderDisplayPath}] so as not to accidentally delete the necessary archive");
             return;
         }
-        
+
         var diskFiles = new Dictionary<String, FileInfo>(StringComparer.OrdinalIgnoreCase);
         foreach (var file in files)
         {
             String relPath = Path.GetRelativePath(unpackedFolder, file);
             diskFiles[relPath] = new FileInfo(file);
         }
-        
+
         if (!File.Exists(archivePath))
         {
-            Console.WriteLine($"Packing [{folderDisplayPath}]");
+            Console.WriteLine($"Packing mod: {folderName}");
             using (ZipArchive zip = ZipFile.Open(archivePath, ZipArchiveMode.Create))
             {
                 foreach (var kv in diskFiles)
@@ -195,14 +219,15 @@ class Program
                     Console.WriteLine($"\t Added: {kv.Key}");
                 }
             }
-            Console.WriteLine($"Done.");
+            Console.WriteLine($"Done syncing mod: {folderName}");
         }
         else
         {
-            Console.WriteLine($"Syncing [{folderDisplayPath}]");
             using (ZipArchive zip = ZipFile.Open(archivePath, ZipArchiveMode.Update))
             {
                 var zipEntries = zip.Entries.ToDictionary(e => e.FullName, e => e, StringComparer.OrdinalIgnoreCase);
+
+                Boolean changesFound = false; // Track if any changes are found
 
                 foreach (var entry in zipEntries.Values.ToList())
                 {
@@ -210,6 +235,7 @@ class Program
                     {
                         entry.Delete();
                         Console.WriteLine($"\t Removed: {entry.FullName}");
+                        changesFound = true;
                     }
                 }
 
@@ -227,16 +253,34 @@ class Program
                             entry = zip.CreateEntryFromFile(fi.FullName, relPath, CompressionLevel.Optimal);
                             entry.LastWriteTime = fi.LastWriteTime;
                             Console.WriteLine($"\t Updated: {entry.FullName}");
+                            changesFound = true;
                         }
                     }
                     else
                     {
                         zip.CreateEntryFromFile(fi.FullName, relPath, CompressionLevel.Optimal);
                         Console.WriteLine($"\t Added: {kv.Key}");
+                        changesFound = true;
                     }
+                }
+
+                // If no changes were found, print a single clean message.
+                if (!changesFound)
+                {
+                    Console.WriteLine($"No Changes found for mod: {folderName}");
+                }
+                else
+                {
+                    Console.WriteLine($"Done syncing mod: [ {folderName} ]");
                 }
             }
         }
+    }
+
+    private static void LogCompletion()
+    {
+        Console.WriteLine("--------------------------------\n" +
+            "Syncing process completed. All unpacked mods have been processed.\nYou can safely exit.");
     }
 
     private static String ResolveWorkingDirectory(String[] args)
@@ -244,7 +288,7 @@ class Program
         String directory = Directory.GetCurrentDirectory();
         if (args.Length > 0)
             directory = args[0];
-        
+
         directory = Path.GetFullPath(directory);
         if (!directory.Contains("Mods") && !args.Contains("--any-folder", StringComparer.InvariantCultureIgnoreCase))
             throw new Exception($"Working directory must be subfolder for \"Mods\" directory. Please specify correct working directory or bypass this check by command line argument --any-folder. Working directory: {directory}");
