@@ -150,6 +150,9 @@ class Program
 
     private static void OnChanged(String fullPath)
     {
+        if (Path.GetExtension(fullPath) == ".tmp")
+            return;
+        
         String unpackedFolder = FindUnpackedFolder(fullPath);
         if (unpackedFolder == null)
             return;
@@ -194,7 +197,10 @@ class Program
         Console.WriteLine("--------------------------------");
         Console.WriteLine($"Syncing mod: [ {folderName} ]");
 
-        var files = Directory.GetFiles(unpackedFolder, "*", SearchOption.AllDirectories);
+        var files = Directory.GetFiles(unpackedFolder, "*", SearchOption.AllDirectories)
+            .Where(f=> Path.GetExtension(f) != ".tmp")
+            .ToArray();
+        
         if (files.Length == 0)
         {
             Console.WriteLine($"Skipping the empty mod folder [{folderDisplayPath}] so as not to accidentally delete the necessary archive");
