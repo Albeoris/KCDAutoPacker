@@ -286,7 +286,7 @@ class Program
     private static void LogCompletion()
     {
         Console.WriteLine("--------------------------------\n" +
-            "Syncing process completed. All unpacked mods have been processed.\nYou can safely exit.");
+            "All unpacked mods have been processed. You can safely exit.");
     }
 
     private static String ResolveWorkingDirectory(String[] args)
