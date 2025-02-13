@@ -1,6 +1,7 @@
 ﻿using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO.Compression;
+using Microsoft.VisualBasic;
 
 namespace KCDAutoPacker;
 
@@ -152,7 +153,10 @@ class Program
     {
         if (Path.GetExtension(fullPath) == ".tmp")
             return;
-        
+
+        if (IsTempOrHiddenFile(fullPath))
+            return;
+
         String unpackedFolder = FindUnpackedFolder(fullPath);
         if (unpackedFolder == null)
             return;
@@ -198,7 +202,7 @@ class Program
         Console.WriteLine($"Syncing mod: [ {folderName} ]");
 
         var files = Directory.GetFiles(unpackedFolder, "*", SearchOption.AllDirectories)
-            .Where(f=> Path.GetExtension(f) != ".tmp")
+            .Where(f=> !IsTempOrHiddenFile(f))
             .ToArray();
         
         if (files.Length == 0)
@@ -281,6 +285,16 @@ class Program
                 }
             }
         }
+    }
+
+    private static Boolean IsTempOrHiddenFile(String fullPath)
+    {
+        FileInfo fileInfo = new FileInfo(fullPath);
+        if (fileInfo.Extension == ".tmp")
+            return true;
+        if (fileInfo.Attributes.HasFlag(FileAttribute.Hidden))
+            return true;
+        return false;
     }
 
     private static void LogCompletion()
