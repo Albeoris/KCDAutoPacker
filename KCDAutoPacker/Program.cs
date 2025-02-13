@@ -292,7 +292,7 @@ class Program
         FileInfo fileInfo = new FileInfo(fullPath);
         if (fileInfo.Extension == ".tmp")
             return true;
-        if (fileInfo.Attributes.HasFlag(FileAttribute.Hidden))
+        if (fileInfo.Attributes.HasFlag(FileAttributes.Hidden))
             return true;
         return false;
     }
