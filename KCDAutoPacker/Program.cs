@@ -8,6 +8,7 @@ namespace KCDAutoPacker;
 class Program
 {
     private static Boolean _printErrorStack;
+    private static Boolean _packOriginalFiles;
     private static String _workingDirectory;
 
     static Int32 Main(String[] args)
@@ -30,6 +31,7 @@ class Program
 ";
         Console.WriteLine(welcomeMessage);
         _printErrorStack = args.Contains("--print-error-stack", StringComparer.InvariantCultureIgnoreCase);
+        _packOriginalFiles = args.Contains("--pack-original", StringComparer.InvariantCultureIgnoreCase);
 
         try
         {
@@ -156,6 +158,9 @@ class Program
 
         if (IsTempOrHiddenFile(fullPath))
             return;
+        
+        if (IsOrgiginalFile(fullPath))
+            return;
 
         String unpackedFolder = FindUnpackedFolder(fullPath);
         if (unpackedFolder == null)
@@ -202,7 +207,7 @@ class Program
         Console.WriteLine($"Syncing mod: [ {folderName} ]");
 
         var files = Directory.GetFiles(unpackedFolder, "*", SearchOption.AllDirectories)
-            .Where(f=> !IsTempOrHiddenFile(f))
+            .Where(f=> !IsTempOrHiddenFile(f) && !IsOrgiginalFile(f))
             .ToArray();
         
         if (files.Length == 0)
@@ -295,6 +300,11 @@ class Program
         if (fileInfo.Attributes.HasFlag(FileAttributes.Hidden))
             return true;
         return false;
+    }
+    
+    private static Boolean IsOrgiginalFile(String fullPath)
+    {
+        return fullPath.Contains(".original");
     }
 
     private static void LogCompletion()
