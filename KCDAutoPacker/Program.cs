@@ -1,7 +1,6 @@
 ﻿using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO.Compression;
-using Microsoft.VisualBasic;
 
 namespace KCDAutoPacker;
 
@@ -70,9 +69,159 @@ class Program
         CancellationTokenSource cts = new CancellationTokenSource();
         Task.Run(()=>BackgroundWorker(cts.Token), cts.Token);
 
-        Console.WriteLine("Watching started. Press ENTER to stop and exit...");
+        Console.WriteLine("Watching started. Press 'R' to create a new release. Press ENTER to stop and exit...");
+
+        while (!cts.Token.IsCancellationRequested)
+        {
+            if (Console.KeyAvailable)
+            {
+                var key = Console.ReadKey(intercept: true).Key;
+                if (key == ConsoleKey.R)  // If 'R' is pressed
+                {
+                    CreateReleaseFolderStructure();
+                }
+            }
+            Thread.Sleep(100);  // Give the system a little break to avoid CPU overload
+        }
+
         Console.ReadLine();
         cts.Cancel();
+    }
+
+    private static void CreateReleaseFolderStructure()
+    {
+        // Path for the new Mods-Dev folder one step outside the current directory
+        string parentDirectory = Directory.GetParent(_workingDirectory).FullName;
+        string modsDevFolderPath = Path.Combine(parentDirectory, "Mods-Dev");
+
+        // Create the Mods-Dev folder if it doesn't exist
+        if (!Directory.Exists(modsDevFolderPath))
+        {
+            Directory.CreateDirectory(modsDevFolderPath);
+            Console.WriteLine("--------------------------------");
+            Console.WriteLine("Setting up 'Mods-Dev' folder at the game root directory....\n" +
+                              "--------------------------------");
+        }
+
+        // Path for the Release folder inside Mods-Dev
+        string releaseFolderPath = Path.Combine(modsDevFolderPath, "Release");
+
+        // Create the Release folder if it doesn't exist
+        if (!Directory.Exists(releaseFolderPath))
+        {
+            Directory.CreateDirectory(releaseFolderPath);
+        }
+
+        // Get the list of mod directories 
+        string[] modDirs = Directory.GetDirectories(_workingDirectory, "*", SearchOption.TopDirectoryOnly);
+
+        // Current timestamp for the zip filenames
+        string timestamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
+
+        // Iterate through each mod folder
+        foreach (var modDir in modDirs)
+        {
+            string? unpackedDir = null;
+            string modDirName = Path.GetFileName(modDir);
+
+            // Find any .unpacked directory in the mod's Data folder and only select the one that matches the mod's folder name
+            string dataPath = Path.Combine(modDir, "Data");
+            string[] unpackedDirs = Directory.Exists(dataPath)
+                ? Directory.GetDirectories(dataPath, "*.unpacked")
+                    .Where(dir => !string.IsNullOrEmpty(dir))
+                    .ToArray()
+                : Array.Empty<string>();
+
+            if (unpackedDirs.Length == 0)
+            {
+                continue;  // Skip mods without any .unpacked directory
+            }
+
+            string unpackedDirName = unpackedDirs
+                .Select(Path.GetFileNameWithoutExtension)
+                .FirstOrDefault(name => string.Equals(
+                    name,
+                    modDirName,
+                    StringComparison.OrdinalIgnoreCase)) ?? string.Empty;
+
+            if (string.IsNullOrEmpty(unpackedDirName))
+            {
+                Console.WriteLine("--------------------------------");
+                Console.BackgroundColor = ConsoleColor.Red;
+                Console.ForegroundColor = ConsoleColor.Black;
+                Console.WriteLine($"Error:Mismatch between mod: {modDirName} root folder name and unpacked folder name: {Path.GetFileNameWithoutExtension(unpackedDirs[0])}\n");
+                Console.WriteLine("Insure names are matching. IMPORTANT: after correction, make sure to manually delete the old .pak file");
+                Console.ResetColor();
+                Console.WriteLine("--------------------------------");
+                continue;
+            }
+
+            if (string.Equals(modDirName, unpackedDirName, StringComparison.OrdinalIgnoreCase))
+            {
+                unpackedDir = Path.Combine(modDir, "Data", $"{modDirName}.unpacked");
+            }
+
+            if (unpackedDir != null && Directory.Exists(unpackedDir))  // Only process mods under development
+            {
+                // Create the mod folder inside the Release folder
+                string modReleaseFolderPath = Path.Combine(releaseFolderPath, modDirName);
+                if (!Directory.Exists(modReleaseFolderPath))
+                {
+                    Directory.CreateDirectory(modReleaseFolderPath); // Creating mod folder inside Release
+                }
+
+                // Prepare to zip the mod, but exclude the .unpacked folder
+                string zipPath = Path.Combine(modReleaseFolderPath, $"{modDirName}-{timestamp}.zip");
+
+                // Create a tempo dir to copy all files except the .unpacked folder
+                string tempDir = Path.Combine(modReleaseFolderPath, modDirName + "-Temp");
+                Directory.CreateDirectory(tempDir); // Create a temporary folder to hold the contents for zipping
+
+                // Create the root folder (ModName) inside the temp directory
+                string modTempDir = Path.Combine(tempDir, modDirName);
+                Directory.CreateDirectory(modTempDir); // This will be the root folder inside the zip file
+
+                // Copy the contents of the mod folder into the root folder inside the temp directory
+                CopyModDirectoryExcludingUnpacked(modDir, modTempDir);
+
+                // Create the zip file from the temporary folder
+                ZipFile.CreateFromDirectory(tempDir, zipPath);
+                Console.WriteLine($"new release zip file created for mod: {modDirName}\n--------------------------------");
+
+                // Clean up the temporary directory after zipping
+                Directory.Delete(tempDir, true);
+            }
+        }
+
+        Console.WriteLine("New release completed.\n" +
+                          "--------------------------------");
+    }
+
+    // Helper method to copy directories recursively, excluding .unpacked
+    private static void CopyModDirectoryExcludingUnpacked(string sourceDir, string destDir)
+    {
+        // Get all the items (files and subdirectories) in the source directory
+        foreach (var item in Directory.GetFileSystemEntries(sourceDir))
+        {
+            string destPath = Path.Combine(destDir, Path.GetFileName(item));
+
+            // Skip the .unpacked folder and its contents
+            if (item.EndsWith(".unpacked", StringComparison.OrdinalIgnoreCase))
+            {
+                continue; // Skip the .unpacked folder
+            }
+
+            if (Directory.Exists(item))
+            {
+                // Recurse into subdirs
+                Directory.CreateDirectory(destPath); // Ensure the destination directory exists
+                CopyModDirectoryExcludingUnpacked(item, destPath); // Recurse to copy subdirs
+            }
+            else
+            {
+                File.Copy(item, destPath, true); // Copy files
+            }
+        }
     }
 
     private static void InitialSync()
@@ -158,7 +307,6 @@ class Program
 
         if (IsTempOrHiddenFile(fullPath))
             return;
-        
         if (IsOrgiginalFile(fullPath))
             return;
 
@@ -209,7 +357,6 @@ class Program
         var files = Directory.GetFiles(unpackedFolder, "*", SearchOption.AllDirectories)
             .Where(f=> !IsTempOrHiddenFile(f) && !IsOrgiginalFile(f))
             .ToArray();
-        
         if (files.Length == 0)
         {
             Console.WriteLine($"Skipping the empty mod folder [{folderDisplayPath}] so as not to accidentally delete the necessary archive");
@@ -301,7 +448,6 @@ class Program
             return true;
         return false;
     }
-    
     private static Boolean IsOrgiginalFile(String fullPath)
     {
         return fullPath.Contains(".original");
@@ -309,8 +455,7 @@ class Program
 
     private static void LogCompletion()
     {
-        Console.WriteLine("--------------------------------\n" +
-            "All unpacked mods have been processed. You can safely exit.");
+        Console.WriteLine("--------------------------------\nAll unpacked mods have been processed. You can safely exit.");
     }
 
     private static String ResolveWorkingDirectory(String[] args)
@@ -328,10 +473,13 @@ class Program
 
     private static void PrintException(String message, Exception ex)
     {
+        Console.BackgroundColor = ConsoleColor.Red;
+        Console.ForegroundColor = ConsoleColor.Black;
         if (_printErrorStack)
             Console.WriteLine($"{message} Error: {ex}");
         else
             Console.WriteLine($"{message} Error: {ex.Message}");
+        Console.ResetColor();
     }
 
     private static String GetDisplayPath(String dir)
