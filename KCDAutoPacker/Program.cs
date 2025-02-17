@@ -320,8 +320,7 @@ class Program
             directory = args[0];
 
         directory = Path.GetFullPath(directory);
-        // Used StringComparison instead of StringComparer to allow the mods folder to be (Mods || mods || mOds ..etc)
-        if (!directory.Contains("Mods", StringComparison.InvariantCultureIgnoreCase) && !args.Contains("--any-folder", StringComparer.InvariantCultureIgnoreCase))
+        if (!directory.Contains("Mods", StringComparison.OrdinalIgnoreCase) && !args.Contains("--any-folder", StringComparer.InvariantCultureIgnoreCase))
             throw new Exception($"Working directory must be subfolder for \"Mods\" directory. Please specify correct working directory or bypass this check by command line argument --any-folder. Working directory: {directory}");
 
         return directory;
