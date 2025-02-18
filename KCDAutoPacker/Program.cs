@@ -78,7 +78,15 @@ class Program
                 var key = Console.ReadKey(intercept: true).Key;
                 if (key == ConsoleKey.R)  // If 'R' is pressed
                 {
-                    CreateReleaseFolderStructure();
+                    Console.WriteLine("\nAre you sure you want to create a new release? Press ENTER to confirm or any other key to cancel...");
+                    if (Console.ReadKey(intercept: true).Key == ConsoleKey.Enter)
+                    {
+                        CreateReleaseFolderStructure();
+                    }
+                    else
+                    {
+                        Console.WriteLine("\nRelease creation cancelled.");
+                    }
                 }
             }
             Thread.Sleep(100);  // Give the system a little break to avoid CPU overload
@@ -167,29 +175,13 @@ class Program
                 string modReleaseFolderPath = Path.Combine(releaseFolderPath, modDirName);
                 if (!Directory.Exists(modReleaseFolderPath))
                 {
-                    Directory.CreateDirectory(modReleaseFolderPath); // Creating mod folder inside Release
+                    Directory.CreateDirectory(modReleaseFolderPath);
                 }
 
-                // Prepare to zip the mod, but exclude the .unpacked folder
+                // Create the release zip directly without temp files
                 string zipPath = Path.Combine(modReleaseFolderPath, $"{modDirName}-{timestamp}.zip");
-
-                // Create a tempo dir to copy all files except the .unpacked folder
-                string tempDir = Path.Combine(modReleaseFolderPath, modDirName + "-Temp");
-                Directory.CreateDirectory(tempDir); // Create a temporary folder to hold the contents for zipping
-
-                // Create the root folder (ModName) inside the temp directory
-                string modTempDir = Path.Combine(tempDir, modDirName);
-                Directory.CreateDirectory(modTempDir); // This will be the root folder inside the zip file
-
-                // Copy the contents of the mod folder into the root folder inside the temp directory
-                CopyModDirectoryExcludingUnpacked(modDir, modTempDir);
-
-                // Create the zip file from the temporary folder
-                ZipFile.CreateFromDirectory(tempDir, zipPath);
+                CreateModZipArchive(modDir, zipPath, modDirName);
                 Console.WriteLine($"new release zip file created for mod: {modDirName}\n--------------------------------");
-
-                // Clean up the temporary directory after zipping
-                Directory.Delete(tempDir, true);
             }
         }
 
@@ -197,29 +189,33 @@ class Program
                           "--------------------------------");
     }
 
-    // Helper method to copy directories recursively, excluding .unpacked
-    private static void CopyModDirectoryExcludingUnpacked(string sourceDir, string destDir)
+    private static void CreateModZipArchive(string sourceDir, string zipPath, string modName)
     {
-        // Get all the items (files and subdirectories) in the source directory
-        foreach (var item in Directory.GetFileSystemEntries(sourceDir))
+        var files = Directory.GetFiles(sourceDir, "*", SearchOption.AllDirectories)
+            .Where(f => !IsTempOrHiddenFile(f) && 
+                       !IsOrgiginalFile(f) && 
+                       !f.Contains(".unpacked"))
+            .ToArray();
+
+        if (files.Length == 0)
         {
-            string destPath = Path.Combine(destDir, Path.GetFileName(item));
+            Console.WriteLine($"Skipping the empty mod folder [{modName}] to avoid creating an empty archive");
+            return;
+        }
 
-            // Skip the .unpacked folder and its contents
-            if (item.EndsWith(".unpacked", StringComparison.OrdinalIgnoreCase))
-            {
-                continue; // Skip the .unpacked folder
-            }
+        var diskFiles = new Dictionary<String, FileInfo>(StringComparer.OrdinalIgnoreCase);
+        foreach (var file in files)
+        {
+            String relPath = Path.GetRelativePath(sourceDir, file);
+            diskFiles[relPath] = new FileInfo(file);
+        }
 
-            if (Directory.Exists(item))
+        using (ZipArchive zip = ZipFile.Open(zipPath, ZipArchiveMode.Create))
+        {
+            foreach (var kv in diskFiles)
             {
-                // Recurse into subdirs
-                Directory.CreateDirectory(destPath); // Ensure the destination directory exists
-                CopyModDirectoryExcludingUnpacked(item, destPath); // Recurse to copy subdirs
-            }
-            else
-            {
-                File.Copy(item, destPath, true); // Copy files
+                zip.CreateEntryFromFile(kv.Value.FullName, kv.Key, CompressionLevel.Optimal);
+                Console.WriteLine($"\t Added: {kv.Key}");
             }
         }
     }
