@@ -112,7 +112,8 @@ public class ReleaseCreator
         {
             foreach (var kv in diskFiles)
             {
-                zip.CreateEntryFromFile(kv.Value.FullName, kv.Key, CompressionLevel.Optimal);
+                String entryPath = Path.Combine(modName, kv.Key);
+                zip.CreateEntryFromFile(kv.Value.FullName, entryPath, CompressionLevel.Optimal);
                 Console.WriteLine($"\tAdded: {kv.Key}");
             }
         }
